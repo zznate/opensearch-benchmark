@@ -39,6 +39,7 @@ class DatabaseType(Enum):
     OPENSEARCH = "opensearch"
     MILVUS = "milvus"
     VESPA = "vespa"
+    QUICKWIT = "quickwit"
 
 
 # Global registry mapping database types to their factory classes

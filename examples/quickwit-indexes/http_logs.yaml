@@ -1,0 +1,96 @@
+# Quickwit IndexConfig for the OSB `http_logs` workload.
+#
+# This is the user-side admin artifact that must be applied to Quickwit
+# BEFORE running the workload, because the OSB Quickwit adapter no-ops
+# `create-index` (Quickwit's _elastic API has no create-index endpoint).
+#
+# Usage:
+#   curl -XPOST http://localhost:7280/api/v1/indexes \
+#     --data-binary @http_logs.yaml \
+#     -H "content-type: application/yaml"
+#
+# Or via Quickwit CLI:
+#   quickwit index create --index-config http_logs.yaml
+#
+# Schema rationale: this is the MINIMAL viable mapping covering the
+# fields the OSB http_logs workload queries (@timestamp, clientip,
+# message, size, status) plus the remaining corpus fields (request,
+# geoip.*) so bulk ingestion does not reject documents.
+#
+# Verified against Quickwit b46962585 (workspace version 0.8.0).
+# Source reference: config/tutorials/hdfs-logs/index-config-retention-policy.yaml
+
+version: 0.8
+
+index_id: http_logs
+
+doc_mapping:
+  # `dynamic` so any corpus field not explicitly listed is auto-indexed
+  # rather than rejected. OS `dynamic: strict` is closer to Quickwit
+  # `strict`; we deliberately relax here to avoid bulk failures from
+  # corpus-shape drift across workload versions.
+  mode: dynamic
+
+  field_mappings:
+    - name: "@timestamp"
+      type: datetime
+      input_formats:
+        - rfc3339
+        - unix_timestamp
+      output_format: unix_timestamp_secs
+      fast_precision: seconds
+      fast: true
+
+    - name: clientip
+      type: ip
+      fast: true
+
+    - name: status
+      type: i64
+      fast: true
+
+    - name: size
+      type: i64
+      fast: true
+
+    # Queried as a search-field; OS has it as keyword/non-indexed but
+    # treating as text here keeps the workload's match-all and term
+    # queries against `message` functional. If you need exact-keyword
+    # semantics, switch to tokenizer: raw.
+    - name: message
+      type: text
+      tokenizer: default
+      record: position
+
+    # In the OS mapping `request` is `text` with a `.raw` keyword
+    # sub-field. Quickwit has no multi-field; we expose `request` as
+    # plain text. Workloads that query `request.raw` will need adapter-
+    # level translation in a follow-up.
+    - name: request
+      type: text
+      tokenizer: default
+      record: position
+
+    # geoip object — only the queried sub-fields are explicitly listed;
+    # any additional sub-fields are absorbed by `mode: dynamic`.
+    - name: geoip
+      type: object
+      field_mappings:
+        - name: country_name
+          type: text
+          tokenizer: raw
+        - name: city_name
+          type: text
+          tokenizer: raw
+
+  timestamp_field: "@timestamp"
+
+search_settings:
+  # Match OS's expected default: when a search omits a field, search
+  # the indexed text fields the workload actually queries.
+  default_search_fields: [message, request]
+
+indexing_settings:
+  # Larger commit timeout reduces small-split churn during the bulk
+  # warmup phase. Tune per benchmark sensitivity.
+  commit_timeout_secs: 30
